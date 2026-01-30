@@ -30,3 +30,13 @@ env/
 
 # .vscode
 .vscode/
+
+# checkpoints and model weights
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# benchmark results and logs
+benchmark/results*/
+benchmark/logs/

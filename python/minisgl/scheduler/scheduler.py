@@ -169,10 +169,10 @@ class Scheduler(SchedulerIOMixin):
             write_indices=write_indices,
         )
 
-    def _schedule_next_batch(self) -> ForwardInput | None:
+    def _schedule_next_batch(self, curr_step_max_running_req: int | None = None) -> ForwardInput | None:
         # TODO: support other policies: e.g. DECODE first
         batch = (
-            self.prefill_manager.schedule_next_batch(self.prefill_budget)
+            self.prefill_manager.schedule_next_batch(self.prefill_budget, curr_step_max_running_req)
             or self.decode_manager.schedule_next_batch()
         )
         return self._prepare_batch(batch) if batch else None

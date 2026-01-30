@@ -17,6 +17,7 @@ class ServerArgs(SchedulerConfig):
     server_port: int = 1919
     num_tokenizer: int = 0
     silent_output: bool = False
+    scheduler_policy: str = "fcfs"  # fcfs, rl
 
     @property
     def share_tokenizer(self) -> bool:
@@ -198,6 +199,14 @@ def parse_args(args: List[str], run_shell: bool = False) -> Tuple[ServerArgs, bo
         "--shell-mode",
         action="store_true",
         help="Run the server in shell mode.",
+    )
+
+    parser.add_argument(
+        "--scheduler-policy",
+        type=str,
+        default=ServerArgs.scheduler_policy,
+        choices=["fcfs", "rl"],
+        help="Scheduling policy: fcfs (default), rl (learned policy).",
     )
 
     # Parse arguments

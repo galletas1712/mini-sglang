@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import random
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Tuple, overload
 
 from minisgl.utils import UNSET, Unset, init_logger
@@ -317,25 +319,58 @@ def process_benchmark_results(raw_data: List[RawResult], tokenizer: Any) -> Benc
 def process_benchmark_results(raw_data: List[RawResult]) -> None: ...
 
 
+@overload
+def process_benchmark_results(
+    raw_data: List[RawResult], *, output_dir: str | Path
+) -> None: ...
+
+
+@overload
+def process_benchmark_results(
+    raw_data: List[RawResult], tokenizer: Any, output_dir: str | Path
+) -> BenchmarkResult: ...
+
+
 def process_benchmark_results(
     raw_data: List[RawResult],
     tokenizer: Any = UNSET,
+    output_dir: str | Path | None = None,
 ) -> BenchmarkResult | None:
-    accum_times: List[float] = []
-    first_times: List[float] = []
+    """
+    Process benchmark results and optionally save to CSV files.
+
+    Args:
+        raw_data: List of raw benchmark results
+        tokenizer: Tokenizer for encoding messages (optional)
+        output_dir: Directory to save CSV files (optional). If provided, saves:
+            - ttft.csv: request_id, ttft_ms
+            - tpot.csv: request_id, token_index, tpot_ms
+            - e2e.csv: request_id, e2e_s, input_len, output_len
+            - summary.csv: metric statistics
+    """
+    # Compute per-request metrics
+    per_request_ttft: List[float] = []  # in seconds
+    per_request_tpot: List[List[float]] = []  # list of tpot per request (in seconds)
+    per_request_e2e: List[float] = []  # in seconds
+
     results = [r.tics for r in raw_data]
     for tics in results:
         deltas: List[float] = []
         for i in range(len(tics) - 1):
             diff = tics[i + 1] - tics[i]
             deltas.append(diff)
-        first_times.append(deltas[0])
-        accum_times.extend(deltas[1:])
+        per_request_ttft.append(deltas[0])
+        per_request_tpot.append(deltas[1:])
+        per_request_e2e.append(tics[-1] - tics[0])
 
-    e2e_times = [tics[-1] - tics[0] for tics in results]
-    first_times.sort()
-    accum_times.sort()
-    e2e_times.sort()
+    # Flatten for statistics
+    accum_times = [t for tpots in per_request_tpot for t in tpots]
+    first_times = per_request_ttft.copy()
+    e2e_times = per_request_e2e.copy()
+
+    first_times_sorted = sorted(first_times)
+    accum_times_sorted = sorted(accum_times)
+    e2e_times_sorted = sorted(e2e_times)
 
     def _print_stats(times: List[float], scale: float = 1.0) -> Tuple[float, ...]:
         assert len(times) > 0
@@ -355,9 +390,9 @@ def process_benchmark_results(
         else:
             return f"{x:>6.4f}"
 
-    avg_ttft, p50_ttft, p90_ttft, p99_ttft, max_ttft = _print_stats(first_times, 1000)
-    avg_tpot, p50_tpot, p90_tpot, p99_tpot, max_tpot = _print_stats(accum_times, 1000)
-    avg_e2e, p50_e2e, p90_e2e, p99_e2e, max_e2e = _print_stats(e2e_times)
+    avg_ttft, p50_ttft, p90_ttft, p99_ttft, max_ttft = _print_stats(first_times_sorted, 1000)
+    avg_tpot, p50_tpot, p90_tpot, p99_tpot, max_tpot = _print_stats(accum_times_sorted, 1000)
+    avg_e2e, p50_e2e, p90_e2e, p99_e2e, max_e2e = _print_stats(e2e_times_sorted)
 
     min_time = min(min(r) for r in results)
     max_time = max(max(r) for r in results)
@@ -382,6 +417,48 @@ def process_benchmark_results(
     )
     logger.info(f"Duration: {_fmt(dur)} s")
     logger.info(f"Throughput: {_fmt(num_tokens / dur)} token/s, {_fmt(num_requests / dur)} req/s")
+
+    # Save to CSV files if output_dir is provided
+    if output_dir is not None:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Save TTFT: request_id, ttft_ms
+        with open(output_path / "ttft.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["request_id", "ttft_ms"])
+            for i, ttft in enumerate(per_request_ttft):
+                writer.writerow([i, ttft * 1000])
+
+        # Save TPOT: request_id, token_index, tpot_ms
+        with open(output_path / "tpot.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["request_id", "token_index", "tpot_ms"])
+            for req_id, tpots in enumerate(per_request_tpot):
+                for tok_idx, tpot in enumerate(tpots):
+                    writer.writerow([req_id, tok_idx, tpot * 1000])
+
+        # Save E2E: request_id, e2e_s, input_len, output_len
+        with open(output_path / "e2e.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["request_id", "e2e_s", "input_len", "output_len"])
+            for i, (e2e, raw) in enumerate(zip(per_request_e2e, raw_data)):
+                writer.writerow([i, e2e, raw.input_len or 0, raw.output_len])
+
+        # Save summary statistics
+        with open(output_path / "summary.csv", "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["metric", "avg", "p50", "p90", "p99", "max"])
+            writer.writerow(["ttft_ms", avg_ttft, p50_ttft, p90_ttft, p99_ttft, max_ttft])
+            writer.writerow(["tpot_ms", avg_tpot, p50_tpot, p90_tpot, p99_tpot, max_tpot])
+            writer.writerow(["e2e_s", avg_e2e, p50_e2e, p90_e2e, p99_e2e, max_e2e])
+            writer.writerow(["throughput_token_s", num_tokens / dur, "", "", "", ""])
+            writer.writerow(["throughput_req_s", num_requests / dur, "", "", "", ""])
+            writer.writerow(["duration_s", dur, "", "", "", ""])
+            writer.writerow(["num_requests", num_requests, "", "", "", ""])
+            writer.writerow(["num_tokens", num_tokens, "", "", "", ""])
+
+        logger.info(f"Saved benchmark results to {output_path}")
 
     # normalize the time to start from zero
     results = [[r - min_time for r in tics] for tics in results]

@@ -14,11 +14,23 @@ if TYPE_CHECKING:
 
 
 def _run_scheduler(args: ServerArgs, ack_queue: mp.Queue[str]) -> None:
+    import os
     import torch
     from minisgl.scheduler import Scheduler
 
+    # Determine scheduler class based on policy
+    policy = args.scheduler_policy
+
+    # RL scheduler takes precedence if policy path is set (for backward compat)
+    if os.environ.get('RL_SCHEDULER_POLICY_PATH') or policy == "rl":
+        from minisgl.scheduler import RLScheduler
+        scheduler_cls = RLScheduler
+    else:
+        # Default: FCFS (base Scheduler)
+        scheduler_cls = Scheduler
+
     with torch.inference_mode():
-        scheduler = Scheduler(args)
+        scheduler = scheduler_cls(args)
         scheduler.sync_all_ranks()
 
         if args.tp_info.is_primary():

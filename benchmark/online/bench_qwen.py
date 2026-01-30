@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import random
@@ -34,22 +35,56 @@ def download_qwen_trace(url: str) -> str:
     return str(file_path)
 
 
-async def main():
+async def main(args: argparse.Namespace):
     random.seed(42)  # reproducibility
-    PORT = 1919
-    N = 1000
-    SCALES = [0.4, 0.5, 0.6, 0.7, 0.8, 1.6]  # from fast to slow
-    async with OpenAI(base_url=f"http://127.0.0.1:{PORT}/v1", api_key="") as client:
+    async with OpenAI(base_url=f"http://127.0.0.1:{args.port}/v1", api_key="") as client:
         MODEL = await get_model_name(client)
         tokenizer = AutoTokenizer.from_pretrained(MODEL)
-        TRACES = read_qwen_trace(download_qwen_trace(URL), tokenizer, n=N, dummy=True)
-        logger.info(f"Start benchmarking with {N} requests using model {MODEL}...")
-        for scale in SCALES:
+        TRACES = read_qwen_trace(download_qwen_trace(URL), tokenizer, n=args.num_requests, dummy=True)
+        logger.info(f"Start benchmarking with {args.num_requests} requests using model {MODEL}...")
+        for scale in args.scales:
             traces = scale_traces(TRACES, scale)
             results = await benchmark_trace(client, traces, MODEL)
-            process_benchmark_results(results)
+
+            # Determine output directory for this scale
+            output_dir = None
+            if args.output_dir:
+                output_dir = Path(args.output_dir) / f"scale_{scale}"
+
+            process_benchmark_results(results, output_dir=output_dir)
         logger.info("Benchmarking completed.")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Benchmark with Qwen trace")
+    parser.add_argument(
+        "--port", "-p",
+        type=int,
+        default=1919,
+        help="Server port (default: 1919)",
+    )
+    parser.add_argument(
+        "--num-requests", "-n",
+        type=int,
+        default=1000,
+        help="Number of requests to benchmark (default: 1000)",
+    )
+    parser.add_argument(
+        "--scales", "-s",
+        type=float,
+        nargs="+",
+        default=[0.1],
+        help="Trace time scales to test (default: 0.1)",
+    )
+    parser.add_argument(
+        "--output-dir", "-o",
+        type=str,
+        default=None,
+        help="Directory to save benchmark results as CSV files",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    args = parse_args()
+    asyncio.run(main(args))

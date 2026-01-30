@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, List
 
 import torch
@@ -17,6 +18,8 @@ class PendingReq:
     input_ids: torch.Tensor
     sampling_params: SamplingParams
     chunked_req: ChunkedReq | None = None
+    arrival_time: float = field(default_factory=time.time)
+    cached_len: int = 0  # Set during match_prefix
 
     @property
     def input_len(self) -> int:

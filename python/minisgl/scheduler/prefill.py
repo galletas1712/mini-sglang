@@ -41,6 +41,8 @@ class PrefillAdder:
 
         handle, match_indices = self.cache_manager.match_req(req)
         cached_len = handle.cached_len
+        # Store cached_len on PendingReq for RL observation
+        req.cached_len = cached_len
         # TODO: better estimate policy
         extend_len = req.input_len - cached_len
         estimated_len = extend_len + req.output_len
@@ -121,7 +123,9 @@ class PrefillManager:
     def add_one_req(self, req: UserMsg) -> None:
         self.pending_list.append(PendingReq(req.uid, req.input_ids, req.sampling_params))
 
-    def schedule_next_batch(self, prefill_budget: int) -> Batch | None:
+    def schedule_next_batch(
+        self, prefill_budget: int, curr_step_max_running_req: int | None = None
+    ) -> Batch | None:
         if len(self.pending_list) == 0:
             return None
 
@@ -135,6 +139,8 @@ class PrefillManager:
         reqs: List[Req] = []
         chunked_list: List[PendingReq] = []
         for pending_req in self.pending_list:
+            if curr_step_max_running_req is not None and len(reqs) >= curr_step_max_running_req:
+                break  # Policy said to only take N requests
             if req := adder.try_add_one(pending_req):
                 pending_req.chunked_req = None
                 if isinstance(req, ChunkedReq):
